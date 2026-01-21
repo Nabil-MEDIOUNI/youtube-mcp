@@ -1,23 +1,56 @@
 # YouTube MCP Server (Python)
 
-A comprehensive Python-based MCP (Model Context Protocol) server for extracting YouTube transcripts from videos and playlists, with optional YouTube API integration.
+A Python-based MCP (Model Context Protocol) server for extracting YouTube transcripts from videos, playlists, and channels with smart URL parsing and optional YouTube API integration.
 
 ## Features
 
 - **Single Video Extraction**: Extract transcript from any YouTube video URL
 - **Playlist Extraction**: Batch extract transcripts from entire playlists
+- **Channel Discovery**: Discover and extract content from any YouTube channel
 - **Smart URL Parsing**: Accepts any YouTube URL format (watch, youtu.be, playlist, channel, etc.)
+- **Multiple Discovery Methods**: API, Playwright browser automation, or HTTP scraping
 - **SSL Bypass**: Works in corporate environments with SSL inspection
 - **Rate Limiting**: Built-in delays with adaptive slowdown after consecutive failures
 - **Retry Mode**: Re-process only previously failed videos
 - **Resume Support**: Skip already extracted videos
 - **Structured Output**: Organized folder structure with markdown transcripts
-- **CLI Interface**: Command-line tool matching original workflow
-- **YouTube API Integration**: Optional video details, search, and channel info (requires API key)
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     YouTube MCP Python                          │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐     ┌──────────────┐     ┌─────────────────┐  │
+│  │ URL Parser  │────▶│ Type Router  │────▶│ Extraction Mode │  │
+│  └─────────────┘     └──────────────┘     └─────────────────┘  │
+│         │                   │                      │            │
+│         ▼                   ▼                      ▼            │
+│  ┌─────────────┐     ┌──────────────┐     ┌─────────────────┐  │
+│  │ video_id    │     │ video        │     │ Single Video    │  │
+│  │ playlist_id │     │ playlist     │     │ Batch Playlist  │  │
+│  │ channel_id  │     │ channel      │     │ Channel Scan    │  │
+│  └─────────────┘     └──────────────┘     └─────────────────┘  │
+│                                                    │            │
+│                      ┌─────────────────────────────┘            │
+│                      ▼                                          │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │               Transcript Extractor                       │   │
+│  │  ┌─────────────────┐    ┌───────────────────────────┐   │   │
+│  │  │ youtube-        │    │ Playwright Fallback       │   │   │
+│  │  │ transcript-api  │    │ (for video list scraping) │   │   │
+│  │  └─────────────────┘    └───────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              │                                  │
+│                              ▼                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    Output Manager                        │   │
+│  │  transcripts/{channel_name}/{playlist_name}/             │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Installation
-
-### From Source
 
 ```bash
 cd youtube-mcp
@@ -28,78 +61,15 @@ pip install -e .
 
 ```bash
 pip install mcp youtube-transcript-api requests
+# Optional: for browser-based discovery
+pip install playwright && playwright install chromium
 ```
 
 ## Usage
 
-### CLI (Command Line)
+### MCP Server (Claude Code / Claude Desktop)
 
-```bash
-# From the src directory
-cd youtube-mcp/src
-
-# List available configurations
-python cli.py
-
-# Extract from a config
-python cli.py tjr
-
-# Retry only failed videos
-python cli.py tjr --retry
-
-# Extract all configs
-python cli.py --all
-
-# Single video
-python cli.py --video "https://www.youtube.com/watch?v=VIDEO_ID"
-
-# Custom output directory
-python cli.py tjr --output /path/to/output
-```
-
-### Unified YouTube Command (NEW!)
-
-Discover and extract content from any YouTube channel with a single command:
-
-```bash
-# Discover channel content
-python cli.py youtube @TJRTrades
-
-# Extract specific playlist (p1, p2, ...)
-python cli.py youtube @TJRTrades --action p1
-
-# Extract specific video (v1, v2, ...)
-python cli.py youtube @TJRTrades --action v1
-
-# Extract all videos
-python cli.py youtube @TJRTrades --action extract_all
-
-# Save as JSON config for later
-python cli.py youtube @TJRTrades --action save
-
-# List all content verbosely
-python cli.py youtube @TJRTrades --action list
-
-# Choose discovery method
-python cli.py youtube @TJRTrades --method playwright   # Browser automation
-python cli.py youtube @TJRTrades --method api          # YouTube API (needs key)
-python cli.py youtube @TJRTrades --method scraping     # HTTP scraping (fast)
-```
-
-**Input formats:**
-- `@handle` - Channel handle (e.g., `@TJRTrades`, `@PixiesOfficialTV`)
-- Channel URL - `https://www.youtube.com/@TJRTrades`
-- Channel ID - `UCxxxxxxxx`
-
-**Methods:**
-- `auto` (default) - Try API, then Playwright, then scraping
-- `api` - Requires `YOUTUBE_API_KEY` environment variable
-- `playwright` - Requires `pip install playwright && playwright install chromium`
-- `scraping` - Fastest but may be blocked by YouTube
-
-### MCP Server (with Claude Code or Claude Desktop)
-
-Add to your global Claude config (`~/.claude.json`) or Claude Desktop config:
+Add to your Claude config (`~/.claude.json` or Claude Desktop config):
 
 ```json
 {
@@ -120,13 +90,36 @@ Add to your global Claude config (`~/.claude.json`) or Claude Desktop config:
 }
 ```
 
+### CLI (Command Line)
+
+```bash
+cd youtube-mcp/src
+
+# Unified YouTube command - discover channel content
+python cli.py youtube @TJRTrades
+
+# Extract specific playlist (p1, p2, ...)
+python cli.py youtube @TJRTrades --action p1
+
+# Extract specific video (v1, v2, ...)
+python cli.py youtube @TJRTrades --action v1
+
+# Single video
+python cli.py --video "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# From JSON config
+python cli.py tjr
+
+# Retry only failed videos
+python cli.py tjr --retry
+```
+
 ### Direct Python Usage
 
 ```python
-# Run from the src directory
 from url_parser import parse_youtube_url
 from transcript import TranscriptExtractor
-from playlist import PlaylistScraper, load_playlist_from_json
+from playlist import load_playlist_from_json
 
 # Extract single video transcript
 extractor = TranscriptExtractor(ssl_bypass=True)
@@ -141,119 +134,90 @@ for video in playlist.videos:
 
 ## MCP Tools
 
-### Unified Tool (Recommended)
+### `youtube` (Unified Tool)
 
-#### `youtube`
+Discover, explore, and extract content from any channel with a single input.
 
-The unified YouTube tool - discover, explore, and extract content from any channel with a single input.
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `input` | Yes | - | Channel handle (@name), URL, channel ID, playlist URL, or video URL |
+| `action` | No | `discover` | `discover`, `p1`-`p99`, `v1`-`v99`, `extract_all`, `save_config` |
+| `method` | No | `auto` | `auto`, `api`, `playwright`, `scraping` |
+| `max_videos` | No | 50 | Max videos to discover |
+| `language` | No | `en` | Transcript language |
 
-**Parameters:**
-- `input` (required): Channel handle (@name), URL, channel ID, playlist URL, or video URL
-- `action` (optional): Action to perform (default: "discover")
-  - `discover` - Show channel content with shortcuts
-  - `p1`, `p2`, ... `p99` - Extract specific playlist
-  - `v1`, `v2`, ... `v99` - Extract specific video
-  - `extract_all` - Extract all discovered videos
-  - `save_config` - Save as JSON config file
-  - `list_playlists` - List all playlists
-  - `list_videos` - List all videos
-- `method` (optional): Discovery method (default: "auto")
-  - `auto` - Try API, then Playwright, then scraping
-  - `api` - Use YouTube Data API (requires YOUTUBE_API_KEY)
-  - `playwright` - Use browser automation
-  - `scraping` - Use HTTP scraping
-- `max_videos` (optional): Max videos to discover (default: 50)
-- `max_playlists` (optional): Max playlists to discover (default: 20)
-- `language` (optional): Transcript language (default: "en")
-
-**Examples:**
-```
-youtube @TJRTrades                          # Discover channel
-youtube @TJRTrades action=p1                # Extract first playlist
-youtube @TJRTrades action=v3                # Extract third video
-youtube @TJRTrades method=playwright        # Use Playwright
-youtube @TJRTrades action=save_config       # Save for later
-```
-
-### Core Tools (No API Key Required)
-
-#### `extract_transcript`
+### `extract_transcript`
 
 Extract transcript from a single YouTube video.
 
-**Parameters:**
-- `url` (required): YouTube video URL
-- `language` (optional): Language code (default: "en")
-- `save_file` (optional): Save to file (default: true)
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `url` | Yes | - | YouTube video URL |
+| `language` | No | `en` | Language code |
+| `save_file` | No | `true` | Save to file |
 
-#### `extract_playlist`
+### `extract_playlist`
 
 Extract transcripts from all videos in a playlist.
 
-**Parameters:**
-- `url` (optional): YouTube playlist URL
-- `json_config` (optional): Path to JSON config file (more reliable)
-- `language` (optional): Language code (default: "en")
-- `skip_existing` (optional): Skip already extracted (default: true)
-- `max_videos` (optional): Maximum videos to extract
-- `retry_failed` (optional): Only retry previously failed videos (default: false)
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `url` | No | - | YouTube playlist URL |
+| `json_config` | No | - | Path to JSON config file |
+| `skip_existing` | No | `true` | Skip already extracted |
+| `retry_failed` | No | `false` | Only retry previously failed |
 
-#### `list_playlist`
+### `list_playlist` / `check_transcript`
 
-List all videos in a playlist without extracting.
+List videos in a playlist or check transcript availability.
 
-**Parameters:**
-- `url` (required): YouTube playlist URL
+### API Tools (Requires `YOUTUBE_API_KEY`)
 
-#### `check_transcript`
+- `get_video_info` - Video details (title, stats)
+- `get_channel_info` - Channel info (subscribers, video count)
+- `search_videos` - Search YouTube
 
-Check if transcripts are available for a video.
+## Algorithm
 
-**Parameters:**
-- `url` (required): YouTube video URL
+### Extraction Flow
 
-### YouTube API Tools (Requires YOUTUBE_API_KEY)
+```
+Parse URL → Detect Type (video/playlist/channel)
+                │
+    ┌───────────┼───────────┐
+    ▼           ▼           ▼
+  video     playlist     channel
+    │           │           │
+    │     ┌─────┴─────┐     │
+    │     ▼           ▼     │
+    │   API?    Playwright  │
+    │     │     Scraping    │
+    │     └─────┬─────┘     │
+    │           ▼           │
+    └────► Extract ◄────────┘
+           Transcript
+              │
+              ▼
+         Save Output
+```
 
-#### `get_video_info`
+### Rate Limiting Strategy
 
-Get detailed information about a video (title, stats, etc.).
+```
+BASE_DELAY = 3 seconds
+ERROR_DELAY = 10 seconds
+MAX_CONSECUTIVE_ERRORS = 5
 
-**Parameters:**
-- `url` (required): YouTube video URL
-
-#### `get_channel_info`
-
-Get channel information (subscribers, video count, etc.).
-
-**Parameters:**
-- `url` (required): YouTube channel URL
-
-#### `search_videos`
-
-Search for videos on YouTube.
-
-**Parameters:**
-- `query` (required): Search query
-- `max_results` (optional): Max results 1-50 (default: 10)
-
-## JSON Config Format
-
-Create config files in `tools/channels/` for reliable playlist extraction:
-
-```json
-{
-  "channel": {
-    "id": "channel-id",
-    "name": "Channel Name",
-    "url": "https://www.youtube.com/@handle",
-    "playlist_id": "PLAYLIST_ID",
-    "playlist_name": "Playlist Name"
-  },
-  "videos": [
-    {"index": 1, "id": "VIDEO_ID", "title": "Video Title"},
-    {"index": 2, "id": "VIDEO_ID2", "title": "Video Title 2"}
-  ]
-}
+for each video:
+  try:
+    extract_transcript()
+    sleep(BASE_DELAY)
+  except IPBlocked:
+    STOP immediately
+  except TransientError:
+    retry with exponential backoff
+  except PermanentError:
+    log error, continue
 ```
 
 ## Output Structure
@@ -265,11 +229,67 @@ transcripts/
 │   │   ├── _playlist_info.json
 │   │   ├── _extraction_report.json
 │   │   ├── 01_video_title.md
-│   │   ├── 02_video_title.md
-│   │   └── ...
+│   │   └── 02_video_title.md
 │   └── singles/
 │       └── video_title.md
 ```
+
+### Transcript Format (Markdown)
+
+```markdown
+# Video Title
+
+## Video Info
+- **Channel**: Channel Name
+- **Video ID**: VIDEO_ID
+- **URL**: https://www.youtube.com/watch?v=VIDEO_ID
+- **Extracted**: 2026-01-21
+
+---
+
+## Full Text
+
+Transcript content here...
+```
+
+## URL Format Support
+
+| Format | Example | Supported |
+|--------|---------|-----------|
+| Standard video | `youtube.com/watch?v=ID` | Yes |
+| Short URL | `youtu.be/ID` | Yes |
+| Playlist | `playlist?list=PLID` | Yes |
+| Channel handle | `youtube.com/@handle` | Yes |
+| Channel ID | `youtube.com/channel/UCID` | Yes |
+
+## Limitations
+
+### Hard Limitations
+
+| Limitation | Reason |
+|------------|--------|
+| Videos without captions | Creator disabled or never added |
+| Private/deleted videos | Not accessible |
+| Age-restricted videos | Requires login |
+| IP blocking | Too many requests - wait and retry |
+
+### Soft Limitations
+
+| Limitation | Mitigation |
+|------------|------------|
+| Rate limiting | Configurable delays, adaptive backoff |
+| SSL errors | Auto-retry with bypass |
+| Large playlists | Batch processing, resume support |
+
+## Error Handling
+
+| Error | Action |
+|-------|--------|
+| `TranscriptsDisabled` | Skip video |
+| `NoTranscriptFound` | Try other languages |
+| `VideoUnavailable` | Skip video |
+| `IpBlocked` | Stop, wait, retry later |
+| `SSLError` | Auto-retry with bypass |
 
 ## Configuration
 
@@ -277,64 +297,29 @@ transcripts/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `YOUTUBE_MCP_OUTPUT_DIR` | `transcripts` | Output directory for saved files |
-| `YOUTUBE_MCP_LANGUAGE` | `en` | Default transcript language |
+| `YOUTUBE_MCP_OUTPUT_DIR` | `transcripts` | Output directory |
+| `YOUTUBE_MCP_LANGUAGE` | `en` | Default language |
 | `YOUTUBE_MCP_RATE_LIMIT` | `3` | Seconds between requests |
-| `YOUTUBE_API_KEY` | - | YouTube Data API key (optional) |
+| `YOUTUBE_API_KEY` | - | YouTube API key (optional) |
 
-### CLI Arguments
+## Project Structure
 
-| Argument | Description |
-|----------|-------------|
-| `--output`, `-o` | Output directory |
-| `--language`, `-l` | Transcript language |
-| `--delay`, `-d` | Delay between requests |
-| `--retry` | Only retry failed videos |
-| `--all` | Process all configurations |
-| `--video`, `-v` | Single video URL |
-| `--url`, `-u` | Playlist URL |
-
-## Features from Original Projects
-
-### From `extract_transcripts.py`
-
-- [x] SSL bypass for corporate environments
-- [x] Batch extraction with rate limiting
-- [x] JSON config loading
-- [x] Markdown output format
-- [x] Extraction reports
-- [x] Skip existing videos
-- [x] Retry failed videos only (`--retry`)
-- [x] IP blocking detection
-- [x] Adaptive rate limiting (slowdown after consecutive failures)
-- [x] CLI interface
-
-### From TypeScript `youtube-mcp-server`
-
-- [x] Get transcript
-- [x] List playlist videos
-- [x] Check transcript availability
-- [x] Get video details (requires API key)
-- [x] Get channel info (requires API key)
-- [x] Search videos (requires API key)
-
-## Limitations
-
-- **No API Key Required for Transcripts**: Uses web scraping, not YouTube API
-- **Captions Required**: Only works for videos with captions/transcripts
-- **Rate Limiting**: YouTube may block IP after many requests
-- **Hidden Videos**: Cannot access private/deleted videos
-- **Playlist Scraping**: HTTP scraping may hit consent pages; use JSON configs
-
-## Error Handling
-
-| Error | Description | Action |
-|-------|-------------|--------|
-| `TranscriptsDisabled` | Video has no captions | Skip |
-| `NoTranscriptFound` | No transcript in language | Try other languages |
-| `VideoUnavailable` | Private/deleted/locked | Skip |
-| `IpBlocked` | Too many requests | Stop, wait, retry later |
-| `SSLError` | Certificate issues | Auto-retry with bypass |
+```
+youtube-mcp/
+├── src/
+│   ├── server.py        # MCP server implementation
+│   ├── cli.py           # Command-line interface
+│   ├── discovery.py     # Channel/playlist discovery
+│   ├── transcript.py    # Transcript extraction
+│   ├── playlist.py      # Playlist handling
+│   ├── url_parser.py    # URL parsing utilities
+│   ├── youtube_api.py   # YouTube API integration
+│   └── output.py        # Output file management
+├── transcripts/         # Default output directory
+├── pyproject.toml
+├── requirements.txt
+└── README.md
+```
 
 ## License
 
