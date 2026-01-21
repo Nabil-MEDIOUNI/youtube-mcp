@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "youtube-mcp"
+version = "1.0.0"
+description = "YouTube MCP Server - Extract transcripts from videos and playlists"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Your Name" }
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "youtube-transcript-api>=0.6.0",
+    "requests>=2.31.0",
+    "urllib3>=2.0.0",
+]
+
+[project.optional-dependencies]
+playwright = [
+    "playwright>=1.40.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+]
