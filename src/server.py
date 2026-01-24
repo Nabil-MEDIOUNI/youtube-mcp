@@ -47,7 +47,6 @@ try:
 except ImportError:
     HAS_SUMMARIZER = False
 
-
 # Default configuration
 DEFAULT_OUTPUT_DIR = "transcripts"
 DEFAULT_LANGUAGE = "en"
