@@ -173,3 +173,41 @@ def extract_playlist_id(url: str) -> Optional[str]:
         return parsed.playlist_id
     except ValueError:
         return None
+
+
+def fetch_video_info(video_id: str) -> dict:
+    """
+    Fetch video title and channel name using YouTube oEmbed API.
+    No API key required.
+
+    Returns:
+        dict with 'title', 'channel', 'success' keys
+    """
+    import requests
+
+    # Use YouTube oEmbed API - reliable and doesn't require auth
+    oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+
+    try:
+        response = requests.get(oembed_url, timeout=10, verify=False)
+        response.raise_for_status()
+        data = response.json()
+
+        title = data.get('title', f"Video {video_id}")
+        channel = data.get('author_name', 'unknown')
+
+        return {
+            'success': True,
+            'video_id': video_id,
+            'title': title,
+            'channel': channel,
+        }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'video_id': video_id,
+            'title': f"Video {video_id}",
+            'channel': "unknown",
+            'error': str(e),
+        }

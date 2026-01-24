@@ -19,7 +19,7 @@ from mcp.types import (
     CallToolResult,
 )
 
-from url_parser import parse_youtube_url, YouTubeURL
+from url_parser import parse_youtube_url, YouTubeURL, fetch_video_info
 from transcript import TranscriptExtractor, TranscriptResult
 from playlist import PlaylistScraper, PlaylistInfo, load_playlist_from_json
 from output import (
@@ -27,6 +27,7 @@ from output import (
     ExtractionReport,
     ExtractionResult,
     sanitize_folder_name,
+    sanitize_filename,
 )
 
 # Optional YouTube API import
@@ -38,6 +39,13 @@ except ImportError:
 
 # Import discovery module
 from discovery import ChannelDiscoverer, ChannelDiscovery, create_config_from_discovery
+
+# Optional summarizer import
+try:
+    from summarizer import TranscriptSummarizer, SummaryStyle, SummaryLength
+    HAS_SUMMARIZER = True
+except ImportError:
+    HAS_SUMMARIZER = False
 
 
 # Default configuration
@@ -75,6 +83,14 @@ class YouTubeMCPServer:
                 self.youtube_api = YouTubeAPI(api_key=api_key, ssl_bypass=True)
             except ValueError:
                 pass  # No API key, API features disabled
+
+        # Initialize summarizer if available
+        self.summarizer = None
+        if HAS_SUMMARIZER:
+            try:
+                self.summarizer = TranscriptSummarizer()
+            except Exception:
+                pass  # No API key or import error, summarization disabled
 
         # MCP Server
         self.server = Server("youtube-mcp")
@@ -291,6 +307,147 @@ EXAMPLES:
                         "required": ["input"],
                     },
                 ),
+                Tool(
+                    name="summarize_video",
+                    description="""Summarize a YouTube video using Claude CLI. Extracts the transcript and generates a summary.
+
+STYLES:
+- bullet-points: Hierarchical bullet point summary (default)
+- paragraph: Flowing paragraph summary
+- key-takeaways: Numbered key insights
+- trading-strategy: Extract trading rules, entry/exit conditions, risk management (best for trading videos)
+
+LENGTHS:
+- short: ~200 words
+- medium: ~500 words (default)
+- long: ~1000 words
+- detailed: ~2000 words
+
+Requires Claude CLI (claude command) to be installed and accessible.""",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "YouTube video URL",
+                            },
+                            "style": {
+                                "type": "string",
+                                "description": "Summary style",
+                                "enum": ["bullet-points", "paragraph", "key-takeaways", "trading-strategy"],
+                                "default": "bullet-points",
+                            },
+                            "length": {
+                                "type": "string",
+                                "description": "Summary length",
+                                "enum": ["short", "medium", "long", "detailed"],
+                                "default": "medium",
+                            },
+                            "language": {
+                                "type": "string",
+                                "description": "Transcript language code",
+                                "default": "en",
+                            },
+                            "custom_instructions": {
+                                "type": "string",
+                                "description": "Additional instructions for the summary (e.g., 'focus on risk management')",
+                            },
+                        },
+                        "required": ["url"],
+                    },
+                ),
+                Tool(
+                    name="summarize_for_indicator",
+                    description="""Specialized summarization for building trading indicators from YouTube videos.
+
+Extracts:
+- Mathematical formulas and calculations
+- Specific price levels, percentages, ratios
+- Entry/exit conditions and rules
+- Indicator settings and parameters
+- Candlestick patterns and formations
+- Timeframe recommendations
+
+Best for ICT, SMC, price action, and technical analysis videos.
+
+Requires Claude CLI (claude command) to be installed and accessible.""",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "YouTube video URL",
+                            },
+                            "indicator_type": {
+                                "type": "string",
+                                "description": "Type of indicator (e.g., 'SMC', 'ICT', 'price-action', 'support-resistance')",
+                            },
+                            "language": {
+                                "type": "string",
+                                "description": "Transcript language code",
+                                "default": "en",
+                            },
+                        },
+                        "required": ["url"],
+                    },
+                ),
+                Tool(
+                    name="summarize_playlist",
+                    description="""Batch summarize all videos in a YouTube playlist.
+
+For each video:
+1. Extracts transcript → saves to transcripts/{channel}/{playlist}/
+2. Generates video summary → saves to summaries/{channel}/{playlist}/
+3. Generates algorithm/indicator guide → saves to summaries/{channel}/{playlist}/
+
+Supports:
+- Skip already processed videos
+- Limit number of videos to process
+- Rate limiting between videos
+
+Output structure:
+- transcripts/{channel}/{playlist}/01_title.md
+- summaries/{channel}/{playlist}/01_title_summary.md
+- summaries/{channel}/{playlist}/01_title_algorithm.md
+
+Requires Claude CLI (claude command) to be installed and accessible.""",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "YouTube playlist URL",
+                            },
+                            "style": {
+                                "type": "string",
+                                "description": "Summary style (trading-strategy recommended for indicators)",
+                                "enum": ["bullet-points", "paragraph", "key-takeaways", "trading-strategy"],
+                                "default": "trading-strategy",
+                            },
+                            "length": {
+                                "type": "string",
+                                "description": "Summary length",
+                                "enum": ["short", "medium", "long", "detailed"],
+                                "default": "detailed",
+                            },
+                            "language": {
+                                "type": "string",
+                                "description": "Transcript language code",
+                                "default": "en",
+                            },
+                            "max_videos": {
+                                "type": "integer",
+                                "description": "Maximum number of videos to process (default: all)",
+                            },
+                            "skip_existing": {
+                                "type": "boolean",
+                                "description": "Skip videos that already have summaries",
+                                "default": True,
+                            },
+                        },
+                        "required": ["url"],
+                    },
+                ),
             ]
 
         @self.server.call_tool()
@@ -312,6 +469,12 @@ EXAMPLES:
                     return await self._search_videos(arguments)
                 elif name == "youtube":
                     return await self._youtube(arguments)
+                elif name == "summarize_video":
+                    return await self._summarize_video(arguments)
+                elif name == "summarize_for_indicator":
+                    return await self._summarize_for_indicator(arguments)
+                elif name == "summarize_playlist":
+                    return await self._summarize_playlist(arguments)
                 else:
                     return CallToolResult(
                         content=[TextContent(type="text", text=f"Unknown tool: {name}")],
@@ -1123,6 +1286,377 @@ EXAMPLES:
                 content=[TextContent(type="text", text=f"Unknown action: {action}\n\nAvailable actions: discover, p1-p99, v1-v99, extract_all, save_config, list_playlists, list_videos")],
                 isError=True,
             )
+
+    async def _summarize_video(self, args: dict[str, Any]) -> CallToolResult:
+        """Handle summarize_video tool call - extracts transcript, summarizes, and saves files."""
+        if not self.summarizer:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text="Summarization not available. Make sure Claude CLI is installed and accessible."
+                )],
+                isError=True,
+            )
+
+        url = args.get("url", "")
+        style = args.get("style", "trading-strategy")  # Default to trading-strategy
+        length = args.get("length", "detailed")  # Default to detailed
+        language = args.get("language", self.default_language)
+        custom_instructions = args.get("custom_instructions")
+
+        # Parse URL
+        try:
+            parsed = parse_youtube_url(url)
+        except ValueError as e:
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"Invalid URL: {e}")],
+                isError=True,
+            )
+
+        if not parsed.video_id:
+            return CallToolResult(
+                content=[TextContent(type="text", text="URL does not contain a video ID")],
+                isError=True,
+            )
+
+        # Extract transcript first
+        transcript_result = self.extractor.extract(parsed.video_id, language)
+
+        if not transcript_result.success:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Failed to extract transcript: {transcript_result.error}"
+                )],
+                isError=True,
+            )
+
+        # Get video title and channel by scraping YouTube page (no API key needed)
+        video_info = fetch_video_info(parsed.video_id)
+        title = video_info.get("title", f"Video {parsed.video_id}")
+        channel_name = video_info.get("channel", "unknown")
+
+        # Save transcript to file
+        transcript_dir = self.output_manager.get_channel_dir(channel_name) / "singles"
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        transcript_path = self.output_manager.save_transcript_markdown(
+            transcript=transcript_result,
+            title=title,
+            channel_name=channel_name,
+            output_dir=transcript_dir,
+            video_url=parsed.get_video_url(),
+        )
+
+        # Summarize
+        summary_result = self.summarizer.summarize(
+            transcript=transcript_result.full_text,
+            video_id=parsed.video_id,
+            title=title,
+            style=style,
+            length=length,
+            custom_instructions=custom_instructions,
+        )
+
+        if not summary_result.success:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Transcript saved but failed to summarize: {summary_result.error}\nTranscript: {transcript_path}"
+                )],
+                isError=True,
+            )
+
+        # Save summary files
+        saved_files = self.output_manager.save_summary_markdown(
+            summary=summary_result,
+            title=title,
+            video_url=parsed.get_video_url(),
+            channel_name=channel_name,
+            include_algorithm=(style == "trading-strategy"),
+        )
+
+        # Build response
+        response = {
+            "success": True,
+            "video_id": summary_result.video_id,
+            "title": title,
+            "files": {
+                "transcript": str(transcript_path),
+                **saved_files,
+            },
+            "transcript_length": summary_result.transcript_length,
+            "summary_style": summary_result.summary_style,
+            "summary_length": summary_result.summary_length,
+            "word_count": summary_result.word_count,
+            "key_topics": summary_result.key_topics,
+            "summary": summary_result.summary_text,
+        }
+
+        if summary_result.trading_insights:
+            response["trading_insights"] = summary_result.trading_insights
+
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(response, indent=2))]
+        )
+
+    async def _summarize_for_indicator(self, args: dict[str, Any]) -> CallToolResult:
+        """Handle summarize_for_indicator tool call - specialized for indicator building."""
+        if not self.summarizer:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text="Summarization not available. Make sure Claude CLI is installed and accessible."
+                )],
+                isError=True,
+            )
+
+        url = args.get("url", "")
+        indicator_type = args.get("indicator_type")
+        language = args.get("language", self.default_language)
+
+        # Parse URL
+        try:
+            parsed = parse_youtube_url(url)
+        except ValueError as e:
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"Invalid URL: {e}")],
+                isError=True,
+            )
+
+        if not parsed.video_id:
+            return CallToolResult(
+                content=[TextContent(type="text", text="URL does not contain a video ID")],
+                isError=True,
+            )
+
+        # Extract transcript first
+        transcript_result = self.extractor.extract(parsed.video_id, language)
+
+        if not transcript_result.success:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Failed to extract transcript: {transcript_result.error}"
+                )],
+                isError=True,
+            )
+
+        # Get video title and channel by scraping YouTube page (no API key needed)
+        video_info = fetch_video_info(parsed.video_id)
+        title = video_info.get("title", f"Video {parsed.video_id}")
+        channel_name = video_info.get("channel", "unknown")
+
+        # Save transcript to file
+        transcript_dir = self.output_manager.get_channel_dir(channel_name) / "singles"
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        transcript_path = self.output_manager.save_transcript_markdown(
+            transcript=transcript_result,
+            title=title,
+            channel_name=channel_name,
+            output_dir=transcript_dir,
+            video_url=parsed.get_video_url(),
+        )
+
+        # Summarize with indicator focus
+        summary_result = self.summarizer.summarize_for_indicator(
+            transcript=transcript_result.full_text,
+            video_id=parsed.video_id,
+            title=title,
+            indicator_type=indicator_type,
+        )
+
+        if not summary_result.success:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Transcript saved but failed to summarize: {summary_result.error}\nTranscript: {transcript_path}"
+                )],
+                isError=True,
+            )
+
+        # Save summary files (always include algorithm for indicator mode)
+        saved_files = self.output_manager.save_summary_markdown(
+            summary=summary_result,
+            title=title,
+            video_url=parsed.get_video_url(),
+            channel_name=channel_name,
+            include_algorithm=True,
+        )
+
+        # Build response with trading-focused structure
+        response = {
+            "success": True,
+            "video_id": summary_result.video_id,
+            "title": title,
+            "indicator_type": indicator_type,
+            "files": {
+                "transcript": str(transcript_path),
+                **saved_files,
+            },
+            "transcript_length": summary_result.transcript_length,
+            "word_count": summary_result.word_count,
+            "key_topics": summary_result.key_topics,
+            "trading_insights": summary_result.trading_insights,
+            "full_summary": summary_result.summary_text,
+        }
+
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(response, indent=2))]
+        )
+
+    async def _summarize_playlist(self, args: dict[str, Any]) -> CallToolResult:
+        """Handle summarize_playlist tool call - batch summarize all videos in a playlist."""
+        if not self.summarizer:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text="Summarization not available. Make sure Claude CLI is installed and accessible."
+                )],
+                isError=True,
+            )
+
+        url = args.get("url", "")
+        style = args.get("style", "trading-strategy")
+        length = args.get("length", "detailed")
+        language = args.get("language", self.default_language)
+        max_videos = args.get("max_videos")
+        skip_existing = args.get("skip_existing", True)
+
+        # Parse URL
+        try:
+            parsed = parse_youtube_url(url)
+        except ValueError as e:
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"Invalid URL: {e}")],
+                isError=True,
+            )
+
+        if not parsed.playlist_id:
+            return CallToolResult(
+                content=[TextContent(type="text", text="URL does not contain a playlist ID")],
+                isError=True,
+            )
+
+        # Get playlist info
+        playlist_info = self.scraper.get_playlist_info(parsed.playlist_id)
+        if not playlist_info or playlist_info.error:
+            return CallToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=f"Failed to get playlist info: {playlist_info.error if playlist_info else 'Unknown error'}"
+                )],
+                isError=True,
+            )
+
+        channel_name = playlist_info.channel_name or "unknown"
+        playlist_name = playlist_info.title or f"playlist_{parsed.playlist_id}"
+
+        # Determine videos to process
+        videos = playlist_info.videos
+        if max_videos and max_videos > 0:
+            videos = videos[:max_videos]
+
+        results = {
+            "successful": [],
+            "failed": [],
+            "skipped": [],
+        }
+
+        # Process each video
+        for i, video in enumerate(videos, 1):
+            video_id = video.video_id
+            video_title = video.title or f"Video {video_id}"
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+            # Check if already processed
+            if skip_existing:
+                summaries_dir = self.output_manager.get_summaries_dir(channel_name) / sanitize_folder_name(playlist_name)
+                if summaries_dir.exists():
+                    existing = list(summaries_dir.glob(f"*{sanitize_filename(video_title)[:30]}*_summary.md"))
+                    if existing:
+                        results["skipped"].append({"index": i, "title": video_title, "reason": "already exists"})
+                        continue
+
+            # Extract transcript
+            transcript_result = self.extractor.extract(video_id, language)
+            if not transcript_result.success:
+                results["failed"].append({"index": i, "title": video_title, "error": transcript_result.error})
+                continue
+
+            # Save transcript
+            transcript_dir = self.output_manager.get_playlist_dir(channel_name, playlist_name)
+            transcript_path = self.output_manager.save_transcript_markdown(
+                transcript=transcript_result,
+                title=video_title,
+                channel_name=channel_name,
+                output_dir=transcript_dir,
+                index=i,
+                playlist_name=playlist_name,
+                video_url=video_url,
+            )
+
+            # Summarize
+            summary_result = self.summarizer.summarize(
+                transcript=transcript_result.full_text,
+                video_id=video_id,
+                title=video_title,
+                style=style,
+                length=length,
+            )
+
+            if not summary_result.success:
+                results["failed"].append({
+                    "index": i,
+                    "title": video_title,
+                    "error": f"Summarization failed: {summary_result.error}",
+                    "transcript": str(transcript_path),
+                })
+                continue
+
+            # Save summaries
+            saved_files = self.output_manager.save_summary_markdown(
+                summary=summary_result,
+                title=video_title,
+                video_url=video_url,
+                channel_name=channel_name,
+                playlist_name=playlist_name,
+                index=i,
+                include_algorithm=(style == "trading-strategy"),
+            )
+
+            results["successful"].append({
+                "index": i,
+                "title": video_title,
+                "files": {
+                    "transcript": str(transcript_path),
+                    **saved_files,
+                },
+            })
+
+            # Rate limit between videos
+            if i < len(videos):
+                await asyncio.sleep(self.rate_limit)
+
+        # Build response
+        response = {
+            "success": True,
+            "playlist_id": parsed.playlist_id,
+            "playlist_title": playlist_name,
+            "channel": channel_name,
+            "total_videos": len(videos),
+            "successful": len(results["successful"]),
+            "failed": len(results["failed"]),
+            "skipped": len(results["skipped"]),
+            "output_folders": {
+                "transcripts": str(self.output_manager.get_playlist_dir(channel_name, playlist_name)),
+                "summaries": str(self.output_manager.get_summaries_dir(channel_name) / sanitize_folder_name(playlist_name)),
+            },
+            "results": results,
+        }
+
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(response, indent=2))]
+        )
 
     async def run(self):
         """Run the MCP server."""

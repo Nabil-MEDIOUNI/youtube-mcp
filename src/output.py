@@ -1,5 +1,5 @@
 """
-Output Manager - Save transcripts and reports in structured format.
+Output Manager - Save transcripts, summaries, and reports in structured format.
 """
 
 import json
@@ -7,10 +7,13 @@ import re
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from transcript import TranscriptResult
 from playlist import PlaylistInfo
+
+if TYPE_CHECKING:
+    from summarizer import SummaryResult
 
 
 def sanitize_filename(name: str, max_length: int = 100) -> str:
@@ -353,3 +356,263 @@ class OutputManager:
                 retry_videos.append(video)
 
         return retry_videos
+
+    def get_summaries_dir(self, channel_name: Optional[str] = None) -> Path:
+        """Get or create summaries directory."""
+        summaries_base = self.base_dir.parent / "summaries"
+        if channel_name:
+            dir_name = sanitize_folder_name(channel_name) or "unknown_channel"
+            summaries_dir = summaries_base / dir_name
+        else:
+            summaries_dir = summaries_base
+        summaries_dir.mkdir(parents=True, exist_ok=True)
+        return summaries_dir
+
+    def save_summary_markdown(
+        self,
+        summary: "SummaryResult",
+        title: str,
+        video_url: str,
+        channel_name: Optional[str] = None,
+        playlist_name: Optional[str] = None,
+        index: Optional[int] = None,
+        include_algorithm: bool = True,
+    ) -> dict:
+        """
+        Save summary as Markdown files (video summary + algorithm summary).
+
+        Args:
+            summary: SummaryResult object
+            title: Video title
+            video_url: YouTube video URL
+            channel_name: Channel name for folder organization
+            playlist_name: Playlist name for subfolder
+            index: Video index in playlist
+            include_algorithm: Whether to save algorithm-focused summary
+
+        Returns:
+            Dict with paths to saved files
+        """
+        # Determine output directory
+        if playlist_name:
+            summaries_dir = self.get_summaries_dir(channel_name) / sanitize_folder_name(playlist_name)
+        else:
+            summaries_dir = self.get_summaries_dir(channel_name) / "singles"
+        summaries_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create filename
+        safe_title = sanitize_filename(title or f"video_{summary.video_id}")
+        if index is not None and index > 0:
+            base_filename = f"{index:02d}_{safe_title}"
+        else:
+            base_filename = safe_title
+
+        saved_files = {}
+
+        # Save video summary
+        summary_filepath = summaries_dir / f"{base_filename}_summary.md"
+        summary_content = self._build_summary_markdown(
+            summary=summary,
+            title=title,
+            video_url=video_url,
+            channel_name=channel_name,
+            playlist_name=playlist_name,
+            index=index,
+            summary_type="video",
+        )
+        summary_filepath.write_text(summary_content, encoding='utf-8')
+        saved_files["summary"] = str(summary_filepath)
+
+        # Save algorithm/indicator summary if trading insights exist
+        if include_algorithm and summary.trading_insights:
+            algo_filepath = summaries_dir / f"{base_filename}_algorithm.md"
+            algo_content = self._build_algorithm_markdown(
+                summary=summary,
+                title=title,
+                video_url=video_url,
+            )
+            algo_filepath.write_text(algo_content, encoding='utf-8')
+            saved_files["algorithm"] = str(algo_filepath)
+
+        return saved_files
+
+    def _build_summary_markdown(
+        self,
+        summary: "SummaryResult",
+        title: str,
+        video_url: str,
+        channel_name: Optional[str] = None,
+        playlist_name: Optional[str] = None,
+        index: Optional[int] = None,
+        summary_type: str = "video",
+    ) -> str:
+        """Build markdown content for video summary."""
+        lines = [
+            f"# {title or 'Video Summary'}",
+            "",
+            "## Video Info",
+            f"- **Video ID**: {summary.video_id}",
+            f"- **URL**: {video_url}",
+        ]
+
+        if channel_name:
+            lines.append(f"- **Channel**: {channel_name}")
+        if playlist_name:
+            lines.append(f"- **Playlist**: {playlist_name}")
+        if index is not None and index > 0:
+            lines.append(f"- **Index**: {index}")
+
+        lines.extend([
+            f"- **Transcript Length**: {summary.transcript_length:,} characters",
+            f"- **Summary Style**: {summary.summary_style}",
+            f"- **Summary Length**: {summary.summary_length}",
+            f"- **Word Count**: {summary.word_count}",
+            f"- **Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "---",
+            "",
+        ])
+
+        # Key topics
+        if summary.key_topics:
+            lines.append("## Key Topics")
+            for topic in summary.key_topics:
+                lines.append(f"- {topic}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        # Main summary
+        lines.append("## Summary")
+        lines.append("")
+        lines.append(summary.summary_text)
+
+        return "\n".join(lines)
+
+    def _build_algorithm_markdown(
+        self,
+        summary: "SummaryResult",
+        title: str,
+        video_url: str,
+    ) -> str:
+        """Build markdown content for algorithm/indicator building summary."""
+        lines = [
+            f"# Algorithm & Indicator Guide: {title or 'Trading Strategy'}",
+            "",
+            "## Source",
+            f"- **Video**: [{title}]({video_url})",
+            f"- **Video ID**: {summary.video_id}",
+            f"- **Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "> This document extracts algorithmic rules and indicator-building information from the video.",
+            "",
+            "---",
+            "",
+        ]
+
+        insights = summary.trading_insights or {}
+
+        # Strategy Overview
+        if insights.get("strategy_overview"):
+            lines.extend([
+                "## Strategy Overview",
+                "",
+                insights["strategy_overview"],
+                "",
+            ])
+
+        # Entry Conditions - formatted for coding
+        if insights.get("entry_conditions"):
+            lines.extend([
+                "## Entry Conditions (Indicator Logic)",
+                "",
+                "```",
+                "// Entry conditions to implement:",
+            ])
+            for i, condition in enumerate(insights["entry_conditions"], 1):
+                lines.append(f"// {i}. {condition}")
+            lines.extend([
+                "```",
+                "",
+                "### Detailed Entry Rules",
+                "",
+            ])
+            for condition in insights["entry_conditions"]:
+                lines.append(f"- {condition}")
+            lines.append("")
+
+        # Exit Conditions
+        if insights.get("exit_conditions"):
+            lines.extend([
+                "## Exit Conditions",
+                "",
+                "```",
+                "// Exit conditions to implement:",
+            ])
+            for i, condition in enumerate(insights["exit_conditions"], 1):
+                lines.append(f"// {i}. {condition}")
+            lines.extend([
+                "```",
+                "",
+            ])
+            for condition in insights["exit_conditions"]:
+                lines.append(f"- {condition}")
+            lines.append("")
+
+        # Risk Management
+        if insights.get("risk_management"):
+            lines.extend([
+                "## Risk Management Parameters",
+                "",
+            ])
+            for rule in insights["risk_management"]:
+                lines.append(f"- {rule}")
+            lines.append("")
+
+        # Indicators/Tools
+        if insights.get("indicators"):
+            lines.extend([
+                "## Indicators & Tools to Use",
+                "",
+            ])
+            for indicator in insights["indicators"]:
+                lines.append(f"- {indicator}")
+            lines.append("")
+
+        # Trading Rules - numbered for implementation
+        if insights.get("trading_rules"):
+            lines.extend([
+                "## Trading Rules (Implementation Checklist)",
+                "",
+            ])
+            for i, rule in enumerate(insights["trading_rules"], 1):
+                lines.append(f"{i}. {rule}")
+            lines.append("")
+
+        # Notes/Warnings
+        if insights.get("notes"):
+            lines.extend([
+                "## Important Notes & Warnings",
+                "",
+            ])
+            for note in insights["notes"]:
+                lines.append(f"- {note}")
+            lines.append("")
+
+        # Pine Script template
+        lines.extend([
+            "---",
+            "",
+            "## Pine Script Template",
+            "",
+            "```pine",
+            "//@version=6",
+            f"indicator('{title or 'Strategy'} Indicator', overlay=true)",
+            "",
+            "// TODO: Implement entry conditions from above",
+            "// TODO: Implement exit conditions",
+            "// TODO: Add risk management logic",
+            "```",
+        ])
+
+        return "\n".join(lines)
